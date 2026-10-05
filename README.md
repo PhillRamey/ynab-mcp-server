@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <code>59 tools with writes enabled</code> &bull;
+  <code>60 tools with writes enabled</code> &bull;
   <code>6 guided prompts</code> &bull;
   <code>undo journal</code> &bull;
   <code>YNAB API v1.85</code> &bull;
@@ -326,7 +326,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-**YNAB API v1.86 coverage** with 59 tools when writes are enabled, plus MCP prompts and resources:
+**YNAB API v1.86 coverage** with 60 tools when writes are enabled, plus MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
