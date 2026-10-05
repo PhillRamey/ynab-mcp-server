@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-10-05 - Fix main CI (release check, audit) and merge Dependabot #26
+
+**What changed**: CI on `main` had failed since 2026-09-24. The release consistency check failed because the README still said 59 tools after the matched transaction resolver raised the count to 60 (`53ebfff`). The production audit also failed on high `fast-uri` advisories because `overrides` in the root and worker `package.json` pinned exact vulnerable versions. Commit `923f502` bumped the pins: fast-uri 4.1.3 to 4.2.1, hono 4.13.5 to 4.13.13, ip-address 10.4.0 to 10.7.3. Merged Dependabot #26 (`undici` and `wrangler` in `/worker`) after it passed on the fixed base. Issue #27 is closed.
+
+**Decisions made**: Updated the pins instead of removing the overrides, since they exist to force patched transitive versions. Left the worker's moderate-only advisories alone because CI audits at the high level.
+
+**Verification**: Every CI step ran locally and passed: root and worker audits at high, `node --check`, unit tests, safety tests, release check, tool-list smoke test, `npm test`, worker tests, and the Wrangler dry run. CI on `923f502` and `ed489ed` passed, all six jobs.
+
+**Left off at**: Nothing open. Source publication only: npm, installed connectors and the hosted Worker were not updated.
+
+**Open questions**: None.
+
+---
+
 ## 2026-09-24 — smaller tool discovery payload (#23)
 
 Shortened repeated input descriptions and tool summaries while preserving units, formats, confirmation gates, matching/split limitations, and undo constraints. The current write-enabled tools/list response fell from 85,132 to 69,678 UTF-8 JSON bytes (15,454 fewer, 18.15%), retaining 63 tools. Both measurements used an SDK stdio client, dummy credentials, disabled agent-config fallback, and JSON.stringify of the complete response. No YNAB API requests were made. The older issue baseline was 85,078 bytes; the figures here are the fresh before/after pair.
