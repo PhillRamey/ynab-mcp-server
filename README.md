@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <code>64 tools with writes enabled</code> &bull;
+  <code>60 tools + 4 discovery helpers</code> &bull;
   <code>6 guided prompts</code> &bull;
   <code>undo journal</code> &bull;
-  <code>40 tools by default</code> &bull;
+  <code>40 read-only operations by default</code> &bull;
   <code>read-only by default</code>
 </p>
 
@@ -322,7 +322,7 @@ YNAB_API_TOKEN=your-token-here npm run smoke:review-unapproved -- --published
 
 ## Features
 
-The source defines 64 tools for the YNAB v1 REST API: 40 available by default and 24 enabled with write access. It also defines MCP prompts and resources:
+The source defines 60 tools for the YNAB v1 REST API and four discovery helpers, for 64 registered MCP operations. Read-only mode exposes 37 YNAB operations and three helpers. Enabling writes adds 23 YNAB operations and the write-execution helper. The server also defines MCP prompts and resources:
 
 | Resource | Tools | Capabilities |
 |----------|-------|-------------|
