@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-10-07 - README Refresh Closeout
+
+**What changed**: Updated configuration and inventory, corrected installation anchors, and distinguished 60 YNAB tools from four discovery helpers.
+
+**Decisions made**: Keep setup and status claims tied to current source or explicitly dated evidence. This entry records the multi-repository README maintenance session.
+
+**Left off at**: Resolved this session: README review and publication at `73d2cb9`. Relative links, examples and applicable counts were checked. The existing release-consistency checker passed all 26 checks after the count wording correction.
+
+**Open questions**: No new question from the README refresh. No YNAB account operation, npm release, installed connector update or hosted deployment ran.
+
+---
+
 ## 2026-10-05 - Fix main CI (release check, audit) and merge Dependabot #26
 
 **What changed**: CI on `main` had failed since 2026-09-24. The release consistency check failed because the README still said 59 tools after the matched transaction resolver raised the count to 60 (`53ebfff`). The production audit also failed on high `fast-uri` advisories because `overrides` in the root and worker `package.json` pinned exact vulnerable versions. Commit `923f502` bumped the pins: fast-uri 4.1.3 to 4.2.1, hono 4.13.5 to 4.13.13, ip-address 10.4.0 to 10.7.3. Merged Dependabot #26 (`undici` and `wrangler` in `/worker`) after it passed on the fixed base. Issue #27 is closed.
