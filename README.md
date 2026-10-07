@@ -26,8 +26,8 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#install-as-a-plugin">Plugin</a> &bull;
-  <a href="#install-in-claude-code">Claude Code</a> &bull;
-  <a href="#install-in-codex">Codex</a> &bull;
+  <a href="#2-install-in-claude-code">Claude Code</a> &bull;
+  <a href="#3-install-in-codex">Codex</a> &bull;
   <a href="#other-plugin-hosts">Other Hosts</a> &bull;
   <a href="#what-you-can-do">What You Can Do</a> &bull;
   <a href="#tools-reference">Tools Reference</a> &bull;
