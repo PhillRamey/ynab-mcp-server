@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-10-07 - GitHub Issue Review Closeout
+
+**What changed**: Reviewed all 6 open issues against source at `e1a5c77c514b` and their complete issue history. No issue qualified for closure.
+
+**Decisions made**: Close completed implementations even when device acceptance remains, and close testing-only tasks under Oliver's explicit instruction. Keep unresolved defects, missing implementation, release work, and owner decisions open.
+
+**Left off at**: Resolved this session: issue assignment and state reconciliation. GitHub was independently re-read on October 7, 2026 at 10:20 AM EDT. All 13 repository issues include Oliver as an assignee, with 6 open. Source paths and cited lines were checked. No runtime tests, deployment, or application changes were performed. This is one part of the account-wide review.
+
+**Open questions**: Still open: [#1](https://github.com/oliverames/ynab-mcp-server/issues/1), [#5](https://github.com/oliverames/ynab-mcp-server/issues/5), [#13](https://github.com/oliverames/ynab-mcp-server/issues/13), [#18](https://github.com/oliverames/ynab-mcp-server/issues/18), [#24](https://github.com/oliverames/ynab-mcp-server/issues/24), [#25](https://github.com/oliverames/ynab-mcp-server/issues/25). Other previously recorded operational follow-ups retain their dated status. No new issue was needed for this review.
+
+---
+
 ## 2026-10-07 - README Refresh Closeout
 
 **What changed**: Updated configuration and inventory, corrected installation anchors, and distinguished 60 YNAB tools from four discovery helpers.
