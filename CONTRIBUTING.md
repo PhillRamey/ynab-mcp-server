@@ -22,6 +22,7 @@ npm run smoke:list-tools
 ```
 
 Offline unit, safety, and discovery checks run on both Windows and Linux in CI.
+The unit command discovers tests from inside `test/`, keeping the root live integration suite out of offline discovery without shell-specific wildcards.
 
 The live integration suite writes temporary records to a real YNAB budget. Use a dedicated test budget when you need live coverage. Leave `YNAB_RUN_NONREVERSIBLE_TESTS` unset unless you intend to create category records that the API cannot delete.
 
