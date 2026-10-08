@@ -38,7 +38,9 @@ const requiredReadTools = [
   "get_budget",
   "list_accounts",
   "get_transactions",
+  "search_transactions",
   "review_unapproved",
+  "resolve_matched_transactions",
   "search_categories",
   "search_payees",
 ];
@@ -150,13 +152,43 @@ assert.ok(
   readOnlyToolsByName.get("get_transactions")?.inputSchema?.properties?.untilDate,
   "expected get_transactions to expose untilDate for YNAB API v1.85 transaction listings",
 );
+assert.ok(
+  readOnlyToolsByName.get("get_transactions")?.inputSchema?.properties?.limit,
+  "expected get_transactions to expose the limit row cap",
+);
+assert.ok(
+  readOnlyToolsByName.get("list_categories"),
+  "expected list_categories to be a read tool",
+);
+
 
 const writableTools = await listTools({ YNAB_ALLOW_WRITES: "1" });
+const discoveryBytes = Buffer.byteLength(JSON.stringify({ tools: writableTools }), "utf8");
+assert.ok(
+  discoveryBytes < 70_000,
+  `write-enabled tools/list must stay below 70,000 bytes; got ${discoveryBytes}`,
+);
+// Check the actual transport response in both modes, including write-only tools.
+for (const tool of [...readOnlyTools, ...writableTools]) {
+  for (const key of ["inputSchema", "outputSchema"]) {
+    assert.equal(tool[key]?.$schema, "https://json-schema.org/draft/2020-12/schema",
+      `${tool.name} ${key} must advertise the client-supported dialect`);
+  }
+}
 const writableNames = new Set(writableTools.map((tool) => tool.name));
 
 for (const name of writeTools) {
   assert.ok(writableNames.has(name), `expected write tool ${name} when writes are enabled`);
 }
+const writableByName = new Map(writableTools.map((tool) => [tool.name, tool]));
+assert.ok(
+  writableByName.get("update_category")?.inputSchema?.properties?.goalFrequency,
+  "expected update_category to expose goalFrequency for YNAB API v1.86 recurring targets",
+);
+assert.ok(
+  writableByName.get("create_category")?.inputSchema?.properties?.goalFrequency,
+  "expected create_category to expose goalFrequency for YNAB API v1.86 recurring targets",
+);
 
 for (const tool of writableTools.filter((tool) => writeTools.includes(tool.name))) {
   assert.equal(
@@ -286,4 +318,4 @@ for (const name of [
   assert.ok(payload.auth.setup.prompt_for_agent.includes("password manager"));
 }
 
-console.log("Safety model checks passed");
+console.log(`Safety model checks passed (${readOnlyTools.length} read-only tools, ${writableTools.length} write-enabled tools, ${discoveryBytes} discovery bytes)`);

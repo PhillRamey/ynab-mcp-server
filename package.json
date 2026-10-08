@@ -1,6 +1,6 @@
 {
   "name": "@oliverames/mcp-server-for-ynab",
-  "version": "5.2.0",
+  "version": "5.4.0",
   "description": "Local MCP server for YNAB budget operations",
   "license": "MIT",
   "repository": {
@@ -37,7 +37,7 @@
     "pretest": "npm run deps:ensure",
     "test": "node test.js",
     "pretest:unit": "npm run deps:ensure",
-    "test:unit": "node --test test/unit.test.mjs",
+    "test:unit": "node --test test",
     "presmoke:list-tools": "npm run deps:ensure",
     "smoke:list-tools": "node scripts/smoke-list-tools.mjs",
     "presmoke:review-unapproved": "npm run deps:ensure",
@@ -45,7 +45,7 @@
     "presmoke:batch-verify": "npm run deps:ensure",
     "smoke:batch-verify": "node scripts/smoke-batch-verify.mjs",
     "sync:plugin": "node scripts/sync-plugin-metadata.mjs",
-    "version": "npm run sync:plugin && git add .agents/plugins/marketplace.json .claude-plugin/marketplace.json .claude-plugin/plugin.json codex/.codex-plugin/plugin.json codex/.codex-plugin/mcp.json .hermes-plugin/marketplace.json .hermes-plugin/plugin.json .hermes-plugin/mcp.json .antigravity-plugin/marketplace.json .antigravity-plugin/plugin.json .antigravity-plugin/mcp_config.json .mcp.json",
+    "version": "npm run sync:plugin && git add .claude-plugin/plugin.json codex/.codex-plugin/plugin.json codex/.codex-plugin/mcp.json .hermes-plugin/marketplace.json .hermes-plugin/plugin.json .hermes-plugin/mcp.json .antigravity-plugin/marketplace.json .antigravity-plugin/plugin.json .antigravity-plugin/mcp_config.json .mcp.json",
     "release:check": "node scripts/check-release-consistency.mjs",
     "release:check:registry": "node scripts/check-release-consistency.mjs --registry",
     "build:mcpb": "node scripts/build-mcpb.mjs",
@@ -61,9 +61,9 @@
   "overrides": {
     "@hono/node-server": "2.0.11",
     "body-parser": "2.3.0",
-    "fast-uri": "4.1.2",
-    "hono": "4.13.0",
-    "ip-address": "10.4.0"
+    "fast-uri": "4.2.1",
+    "hono": "4.13.13",
+    "ip-address": "10.7.3"
   },
   "engines": {
     "node": ">=20"

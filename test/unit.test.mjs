@@ -20,6 +20,13 @@ const {
   normalizeTransactionId,
   mapTransactionInput,
   mapTransactionUpdate,
+  findTransferAccount,
+  transferInputMismatch,
+  goalFrequencyMismatch,
+  capRows,
+  reviewResponseMode,
+  transactionMatchesSearch,
+  searchTransactionsPage,
   transactionUpdateMismatches,
   updateFieldMatches,
   parseSimpleTomlSections,
@@ -312,8 +319,8 @@ test("withWriteGateDescription appends the gate note exactly once", () => {
 });
 
 test("verifyBulkTransactionUpdates verifies a batch with a single list refetch", async (t) => {
-  // Keep the fixture inside the 90-day window regardless of the test date.
-  t.mock.method(Date, "now", () => Date.parse("2026-06-15T12:00:00Z"));
+  // Freeze the window calculation only, leaving the shared rate limiter clock real.
+  t.mock.method(Date, "now", () => Date.parse("2026-06-15T12:00:00Z"), { times: 1 });
   const requests = [];
   const listTransactions = [
     { id: "t1", date: "2026-06-01", amount: -10000, approved: true, deleted: false },
@@ -348,7 +355,8 @@ test("verifyBulkTransactionUpdates verifies a batch with a single list refetch",
 });
 
 test("verifyBulkTransactionUpdates bounds the refetch when no row carries a date", async (t) => {
-  t.mock.method(Date, "now", () => Date.parse("2026-06-15T12:00:00Z"));
+  // Freeze the window calculation only, leaving the shared rate limiter clock real.
+  t.mock.method(Date, "now", () => Date.parse("2026-09-09T12:00:00Z"), { times: 1 });
   const requests = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -369,7 +377,39 @@ test("verifyBulkTransactionUpdates bounds the refetch when no row carries a date
 
   assert.equal(verification.failed.length, 0);
   assert.equal(requests.length, 1);
-  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-03-17/);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-06-11/);
+});
+
+test("verifyBulkTransactionUpdates clamps old rows and refetches only missing rows", async (t) => {
+  // Freeze the window calculation only, leaving the shared rate limiter clock real.
+  t.mock.method(Date, "now", () => Date.parse("2026-09-09T12:00:00Z"), { times: 1 });
+  const rows = [
+    { id: "old", date: "2026-06-10", approved: true, amount: -1000, deleted: false },
+    { id: "edge", date: "2026-06-11", approved: true, amount: -2000, deleted: false },
+    { id: "recent", date: "2026-06-12", approved: true, amount: -3000, deleted: false },
+  ];
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const parsed = new URL(url);
+    requests.push(parsed.pathname + parsed.search);
+    const data = parsed.pathname.endsWith("/transactions/old")
+      ? { transaction: { ...rows[0], subtransactions: [] } }
+      : { transactions: rows.filter(row => row.date >= parsed.searchParams.get("since_date")) };
+    return new Response(JSON.stringify({ data }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  });
+  const { verification, verified } = await verifyBulkTransactionUpdates(
+    "plan-1", rows.map(({ id }) => ({ id, approved: true })), rows,
+  );
+  assert.equal(verification.checked, 3);
+  assert.deepEqual(verification.failed, []);
+  assert.deepEqual(verification.retried, []);
+  assert.equal(verified.length, 3);
+  assert.deepEqual(requests, [
+    "/v1/plans/plan-1/transactions?since_date=2026-06-11",
+    "/v1/plans/plan-1/transactions/old",
+  ]);
 });
 
 test("parseToolExecuteInput validates against the target tool schema", () => {
@@ -821,4 +861,386 @@ test("write tool schemas enforce YNAB's documented field lengths", () => {
     () => parse("update_transaction", { transactionId: "t1", memo: "m".repeat(501) }),
     /Invalid input for update_transaction: memo/,
   );
+});
+
+// --- search_transactions and transfer convenience (2026-09-14) ---
+
+const searchRows = [
+  { id: "t1", date: "2026-09-01", amount: -45.2, payee_name: "Chase Card", memo: "September payment", import_payee_name_original: "CHASE CREDIT CRD AUTOPAY", account_name: "Checking", category_name: null, deleted: false },
+  { id: "t2", date: "2026-09-03", amount: -12.34, payee_name: "Onion River Co-op", memo: null, import_payee_name_original: "AplPay LS ONION RIVEMONTPELIER VT", account_name: "Checking", category_name: "Groceries", deleted: false },
+  { id: "t3", date: "2026-09-05", amount: 12.34, payee_name: "Refund", memo: "co-op return", account_name: "Checking", category_name: "Groceries", deleted: false },
+  { id: "t4", date: "2026-09-06", amount: -99, payee_name: "Split Store", memo: null, account_name: "Card", category_name: "Split", subtransactions: [{ amount: -50, memo: "batteries", category_name: "Household" }, { amount: -49, payee_name: "Hidden Payee", category_name: "Gifts" }], deleted: false },
+  { id: "t5", date: "2026-09-07", amount: -45.2, payee_name: "Chase Card", memo: "deleted row", account_name: "Checking", deleted: true },
+];
+
+test("transactionMatchesSearch covers payee, raw import string, memo, and split rows", () => {
+  assert.equal(transactionMatchesSearch(searchRows[0], { query: "chase" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[1], { query: "MONTPELIER" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[2], { query: "co-op return" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "batteries" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "hidden payee" }), true);
+  assert.equal(transactionMatchesSearch(searchRows[3], { query: "chase" }), false);
+});
+
+test("transactionMatchesSearch matches amounts on absolute value with half-cent tolerance", () => {
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.34 }), true);
+  assert.equal(transactionMatchesSearch(searchRows[2], { amount: -12.34 }), true);
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.35 }), false);
+  // Amount and query combine with AND.
+  assert.equal(transactionMatchesSearch(searchRows[1], { amount: 12.34, query: "refund" }), false);
+  assert.equal(transactionMatchesSearch(searchRows[2], { amount: 12.34, query: "refund" }), true);
+});
+
+test("searchTransactionsPage skips deleted rows, sorts newest-first, and paginates", () => {
+  const all = searchTransactionsPage(searchRows, { query: "e", limit: 2 });
+  // t1 (Chase), t2 (River), t3 (Refund), t4 (Store) all match; t5 is deleted.
+  assert.equal(all.total_matches, 4);
+  assert.equal(all.returned, 2);
+  assert.deepEqual(all.transactions.map((t) => t.id), ["t4", "t3"]);
+  assert.equal(all.has_more, true);
+  assert.equal(all.next_offset, 2);
+
+  const next = searchTransactionsPage(searchRows, { query: "e", limit: 2, offset: all.next_offset });
+  assert.deepEqual(next.transactions.map((t) => t.id), ["t2", "t1"]);
+  assert.equal(next.has_more, false);
+  assert.equal(next.next_offset, null);
+
+  const byAmount = searchTransactionsPage(searchRows, { amount: 45.2 });
+  assert.deepEqual(byAmount.transactions.map((t) => t.id), ["t1"]);
+});
+
+const accounts = [
+  { id: "a-check", name: "Checking", transfer_payee_id: "tp-check", deleted: false },
+  { id: "a-visa", name: "Chase Sapphire Visa", transfer_payee_id: "tp-visa", deleted: false },
+  { id: "a-amex", name: "Chase Freedom", transfer_payee_id: "tp-freedom", deleted: false },
+  { id: "a-old", name: "Old Visa", transfer_payee_id: "tp-old", deleted: true },
+];
+
+test("findTransferAccount resolves by id, exact name, or unique partial name", () => {
+  assert.equal(findTransferAccount(accounts, { transferToAccountId: "a-visa" }).transfer_payee_id, "tp-visa");
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "checking" }).id, "a-check");
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "sapphire" }).id, "a-visa");
+  // Exact match wins over a partial match on another account.
+  assert.equal(findTransferAccount(accounts, { transferToAccountName: "Chase Freedom" }).id, "a-amex");
+});
+
+test("findTransferAccount rejects unknown, ambiguous, and deleted targets with guidance", () => {
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountId: "nope" }), /does not match any account/);
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountName: "chase" }), /ambiguous \(Chase Sapphire Visa, Chase Freedom\)/);
+  assert.throws(() => findTransferAccount(accounts, { transferToAccountName: "Old Visa" }), /does not match any account\. Accounts: Checking/);
+  assert.throws(() => findTransferAccount(accounts, {}), /Provide transferToAccountId or transferToAccountName/);
+});
+
+test("transferInputMismatch forbids mixing a transfer target with a payee", () => {
+  assert.equal(transferInputMismatch({ accountId: "a", payeeName: "Store" }), null);
+  assert.equal(transferInputMismatch({ accountId: "a", transferToAccountName: "Checking" }), null);
+  assert.match(transferInputMismatch({ transferToAccountId: "x", payeeName: "Transfer : Checking" }), /do not pass payeeId or payeeName/);
+  assert.match(transferInputMismatch({ transferToAccountId: "x", transferToAccountName: "y" }), /not both/);
+});
+
+test("create_transaction resolves transferToAccountName into the destination transfer payee", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    calls.push({ url: u, method: init.method ?? "GET", body: init.body ? JSON.parse(init.body) : null });
+    if (u.includes("/accounts")) {
+      return new Response(JSON.stringify({ data: { accounts } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.endsWith("/transactions") && init.method === "POST") {
+      const body = JSON.parse(init.body).transaction;
+      return new Response(JSON.stringify({ data: { transaction: {
+        id: "new-1", date: body.date, amount: body.amount, account_id: body.account_id, account_name: "Checking",
+        payee_id: body.payee_id, payee_name: "Transfer : Chase Sapphire Visa", transfer_account_id: "a-visa",
+        cleared: "uncleared", approved: true, deleted: false, subtransactions: [],
+      } } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected request ${init.method ?? "GET"} ${u}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+    accountId: "a-check", date: "2026-09-14", amount: -250, transferToAccountName: "sapphire", memo: "card payment",
+  });
+  assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
+  const created = JSON.parse(result.content[0].text);
+  assert.equal(created.payee_id, "tp-visa");
+  assert.equal(created.transfer_account_id, "a-visa");
+
+  const post = calls.find((c) => c.method === "POST");
+  assert.equal(post.body.transaction.payee_id, "tp-visa");
+  assert.equal(post.body.transaction.payee_name, undefined);
+  assert.equal("transferToAccountName" in post.body.transaction, false);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+});
+
+test("create_transactions fetches accounts once for a batch and rejects a transfer paired with a payee", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    calls.push({ url: u, method: init.method ?? "GET" });
+    if (u.includes("/accounts")) {
+      return new Response(JSON.stringify({ data: { accounts } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init.method === "POST") {
+      const rows = JSON.parse(init.body).transactions;
+      return new Response(JSON.stringify({ data: { transactions: rows.map((r, i) => ({
+        id: `n${i}`, date: r.date, amount: r.amount, account_id: r.account_id, payee_id: r.payee_id, deleted: false, subtransactions: [],
+      })), duplicate_import_ids: [] } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected request ${u}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const ok = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+    { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa" },
+    { accountId: "a-check", date: "2026-09-14", amount: -50, transferToAccountName: "Chase Freedom" },
+    { accountId: "a-check", date: "2026-09-14", amount: -5, payeeName: "Coffee" },
+  ] });
+  assert.equal(ok.isError ?? false, false, ok.content?.[0]?.text);
+  const body = JSON.parse(ok.content[0].text);
+  assert.deepEqual(body.created.map((c) => c.payee_id), ["tp-visa", "tp-freedom", null]);
+  assert.equal(calls.filter((c) => c.url.includes("/accounts")).length, 1);
+
+  const bad = await instance.internals.invokeRegisteredTool("create_transactions", { transactions: [
+    { accountId: "a-check", date: "2026-09-14", amount: -100, transferToAccountId: "a-visa", payeeName: "Transfer : Chase Sapphire Visa" },
+  ] });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /do not pass payeeId or payeeName/);
+  // No write reached YNAB for the rejected batch.
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1);
+});
+
+test("create_transaction surfaces the transfer hint on YNAB's internal-payee rejection", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: true,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: {
+    id: "400", name: "bad_request", detail: "payee name must not start with an internal payee name",
+  } }), { status: 400, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("create_transaction", {
+    accountId: "a-check", date: "2026-09-14", amount: -250, payeeName: "Transfer : Chase Sapphire Visa",
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /pass transferToAccountId \(or transferToAccountName\)/);
+});
+
+test("search_transactions filters server-side and pages the results", async (t) => {
+  const instance = createYnabServer({
+    hasCredentials: true,
+    writesEnabled: false,
+    journal: null,
+    getAccessToken: async () => "unit-token",
+    defaultBudgetId: "plan-1",
+  });
+  const requests = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    const rows = searchRows.map((r) => ({ ...r, amount: Math.round(r.amount * 1000), account_id: "a-check", cleared: "cleared", approved: true }));
+    return new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("search_transactions", { query: "chase", sinceDate: "2026-09-01", limit: 10 });
+  assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
+  const body = JSON.parse(result.content[0].text);
+  assert.equal(body.scanned, 5);
+  assert.equal(body.total_matches, 1);
+  assert.deepEqual(body.transactions.map((x) => x.id), ["t1"]);
+  assert.equal(body.transactions[0].amount, -45.2);
+  assert.match(requests[0], /\/plans\/plan-1\/transactions\?since_date=2026-09-01/);
+
+  const byAmount = await instance.internals.invokeRegisteredTool("search_transactions", { amount: 12.34, limit: 1 });
+  const page = JSON.parse(byAmount.content[0].text);
+  assert.equal(page.total_matches, 2);
+  assert.deepEqual(page.transactions.map((x) => x.id), ["t3"]);
+  assert.equal(page.next_offset, 1);
+
+  const empty = await instance.internals.invokeRegisteredTool("search_transactions", {});
+  assert.equal(empty.isError, true);
+  assert.match(empty.content[0].text, /Provide a query, an amount, or both/);
+});
+
+test("tool-execute validation names the accepted arguments so a wrong key is self-correcting", () => {
+  assert.throws(
+    () => parseToolExecuteInput("get_transaction", { id: "abc" }),
+    /Invalid input for get_transaction: transactionId: .*Accepted arguments: budgetId, transactionId\./,
+  );
+  assert.throws(
+    () => parseToolExecuteInput("search_transactions", { query: "x", limit: 501 }),
+    /Invalid input for search_transactions: limit/,
+  );
+  // The transfer fields are part of both create schemas.
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null });
+  const parse = instance.internals.parseToolExecuteInput;
+  assert.deepEqual(
+    parse("create_transaction", { accountId: "a", date: "2026-09-14", amount: -1, transferToAccountName: "Checking" }).transferToAccountName,
+    "Checking",
+  );
+  assert.equal(
+    parse("create_transactions", { transactions: [{ accountId: "a", date: "2026-09-14", amount: -1, transferToAccountId: "b" }] }).transactions[0].transferToAccountId,
+    "b",
+  );
+});
+
+// --- 5.4.0: goal_frequency, row caps, review degrade, instructions ---
+
+test("goalFrequencyMismatch enforces YNAB 1.86 recurring-target rules", () => {
+  assert.equal(goalFrequencyMismatch({ goalFrequency: undefined }), null);
+  assert.equal(goalFrequencyMismatch({ goalFrequency: "monthly", goalTarget: 50 }), null);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "monthly" }), /requires goalTarget/);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "monthly", goalTarget: null }), /requires goalTarget/);
+  assert.match(goalFrequencyMismatch({ goalFrequency: "weekly", goalTarget: 20, goalTargetDate: "2026-12-01" }), /cannot be combined with goalTargetDate/);
+});
+
+test("capRows keeps the bare shape under the cap and pages above it", () => {
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: `t${i}` }));
+  const under = capRows(rows, {});
+  assert.equal(under.capped, false);
+  assert.equal(under.rows.length, 7);
+
+  const capped = capRows(rows, { limit: 3 });
+  assert.equal(capped.capped, true);
+  assert.deepEqual(capped.rows.map((r) => r.id), ["t0", "t1", "t2"]);
+  assert.equal(capped.meta.has_more, true);
+  assert.equal(capped.meta.next_offset, 3);
+  assert.equal("hint" in capped.meta, false, "explicit limit needs no hint");
+
+  const last = capRows(rows, { limit: 3, offset: 6 });
+  assert.deepEqual(last.rows.map((r) => r.id), ["t6"]);
+  assert.equal(last.meta.has_more, false);
+  assert.equal(last.meta.next_offset, null);
+
+  const big = Array.from({ length: 501 }, (_, i) => ({ id: i }));
+  const auto = capRows(big, {});
+  assert.equal(auto.capped, true);
+  assert.equal(auto.rows.length, 500);
+  assert.match(auto.meta.hint, /capped at 500 of 501 rows/);
+});
+
+test("reviewResponseMode steps full -> compact -> summary past the cap and never upgrades", () => {
+  assert.deepEqual(reviewResponseMode({ count: 10 }), { mode: "full", summary: false, compact: false, notice: null });
+  const c = reviewResponseMode({ count: 401 });
+  assert.equal(c.mode, "compact");
+  assert.match(c.notice, /returned compact instead of full/);
+  const sm = reviewResponseMode({ count: 801 });
+  assert.equal(sm.mode, "summary");
+  assert.equal(sm.summary, true);
+  // compact requested stays compact until the summary threshold
+  assert.equal(reviewResponseMode({ compact: true, count: 500 }).mode, "compact");
+  assert.equal(reviewResponseMode({ compact: true, count: 900 }).mode, "summary");
+  // summary requested is left alone; raising the cap restores detail
+  assert.equal(reviewResponseMode({ summary: true, count: 5 }).mode, "summary");
+  assert.equal(reviewResponseMode({ count: 900, maxTransactions: 1000 }).mode, "full");
+});
+
+test("get_transactions returns a bare array under the cap and a paged object above it", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: false, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const rows = Array.from({ length: 502 }, (_, i) => ({ id: `t${i}`, date: `2026-01-${String(1 + (i % 28)).padStart(2, "0")}`, amount: -1000, account_id: "a", deleted: false, subtransactions: [] }));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const capped = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", {})).content[0].text);
+  assert.equal(Array.isArray(capped), false);
+  assert.equal(capped.total, 502);
+  assert.equal(capped.returned, 500);
+  assert.equal(capped.has_more, true);
+  assert.equal(capped.next_offset, 500);
+  assert.match(capped.hint, /search_transactions/);
+
+  const page2 = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { offset: 500 })).content[0].text);
+  assert.equal(page2.returned, 2);
+  assert.equal(page2.has_more, false);
+
+  const under = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { limit: 2000 })).content[0].text);
+  assert.equal(under.returned, 502, "explicit limit always returns the paged object");
+
+  // Delta requests are never capped and keep their { transactions, server_knowledge } shape.
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows, server_knowledge: 99 } }), { status: 200, headers: { "content-type": "application/json" } });
+  const delta = JSON.parse((await instance.internals.invokeRegisteredTool("get_transactions", { lastKnowledgeOfServer: 5 })).content[0].text);
+  assert.equal(delta.transactions.length, 502);
+  assert.equal(delta.server_knowledge, 99);
+});
+
+test("export_transactions keeps the newest rows and reports truncation in a second block", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: false, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const rows = Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, date: `2026-02-0${i + 1}`, amount: -1000 * (i + 1), account_name: "A", deleted: false, cleared: "cleared", approved: true, subtransactions: [] }));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { transactions: rows } }), { status: 200, headers: { "content-type": "application/json" } });
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const result = await instance.internals.invokeRegisteredTool("export_transactions", { maxRows: 2 });
+  assert.equal(result.content.length, 2);
+  const lines = result.content[0].text.trim().split("\n");
+  assert.equal(lines.length, 3, "header plus two rows");
+  assert.match(lines[1], /^2026-02-04/);
+  assert.match(lines[2], /^2026-02-05/);
+  assert.match(result.content[1].text, /2 newest of 5 rows/);
+
+  const full = await instance.internals.invokeRegisteredTool("export_transactions", {});
+  assert.equal(full.content.length, 1);
+});
+
+test("create_category and update_category send goal_frequency and reject bad combinations before the write", async (t) => {
+  const instance = createYnabServer({ hasCredentials: true, writesEnabled: true, journal: null, getAccessToken: async () => "unit-token", defaultBudgetId: "plan-1" });
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method, body: init.body ? JSON.parse(init.body) : null });
+    return new Response(JSON.stringify({ data: { category: { id: "c1", name: "Gym", goal_type: "NEED", goal_target: 50000, goal_cadence: 1, goal_cadence_frequency: 1, internal: false, deleted: false } } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const created = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "Gym", goalTarget: 50, goalFrequency: "monthly" });
+  assert.equal(created.isError ?? false, false, created.content?.[0]?.text);
+  assert.equal(calls.at(-1).body.category.goal_frequency, "monthly");
+  assert.equal(calls.at(-1).body.category.goal_target, 50000);
+  assert.equal(JSON.parse(created.content[0].text).internal, false);
+
+  const updated = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalTarget: 20, goalFrequency: "weekly" });
+  assert.equal(updated.isError ?? false, false, updated.content?.[0]?.text);
+  assert.equal(calls.at(-1).method, "PATCH");
+  assert.equal(calls.at(-1).body.category.goal_frequency, "weekly");
+
+  const before = calls.length;
+  const bad = await instance.internals.invokeRegisteredTool("update_category", { categoryId: "c1", goalFrequency: "monthly" });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /requires goalTarget/);
+  const bad2 = await instance.internals.invokeRegisteredTool("create_category", { categoryGroupId: "g1", name: "X", goalTarget: 5, goalTargetDate: "2026-12-01", goalFrequency: "yearly" });
+  assert.equal(bad2.isError, true);
+  assert.match(bad2.content[0].text, /cannot be combined with goalTargetDate/);
+  assert.equal(calls.length, before, "no request reaches YNAB for a rejected combination");
+});
+
+test("server advertises instructions at initialize", () => {
+  const instance = createYnabServer({ hasCredentials: false, writesEnabled: false, journal: null });
+  const instructions = instance.server?.server?._instructions ?? instance.server?._instructions;
+  assert.equal(typeof instructions, "string");
+  assert.match(instructions, /search_transactions/);
+  assert.match(instructions, /transferToAccountId/);
+  assert.match(instructions, /transactionId/);
 });
